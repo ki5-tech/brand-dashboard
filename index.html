@@ -371,7 +371,10 @@ function toggleLabels(n){
 function render(){
   const all=DATA[curBrand]||[], filled=all.filter(d=>d.청구>0);
   if(!filled.length) return;
-  const last=filled[filled.length-1], prev=filled.length>1?filled[filled.length-2]:null;
+  // 브랜드추이표 선택 월과 연동
+  const idx = curSummaryMonth ? filled.findIndex(d=>d.m===curSummaryMonth) : filled.length-1;
+  const lastIdx = idx>=0 ? idx : filled.length-1;
+  const last=filled[lastIdx], prev=lastIdx>0?filled[lastIdx-1]:null;
   const bc=BC[curBrand]||"#6366f1";
   const labels=filled.map(d=>d.m.replace(/^(\d{2})-0?(\d+)/,"'$1.$2월"));
   const dlOff={display:false};
@@ -465,6 +468,8 @@ function buildMonthSelect(){
   if(!months.length) return;
   if(!curSummaryMonth||!months.includes(curSummaryMonth)) curSummaryMonth=months[months.length-1];
   sel.innerHTML=months.map(m=>{const[y,mo]=m.split("-");return`<option value="${m}" ${m===curSummaryMonth?"selected":""}>${"20"+y}년 ${parseInt(mo)}월</option>`;}).join("");
+  // 선택된 월로 KPI 초기화
+  render();
 }
 
 function changeMonth(dir){
@@ -474,6 +479,7 @@ function changeMonth(dir){
 
 function renderSummary(){
   curSummaryMonth=document.getElementById("monthSelect").value;
+  render(); // KPI·차트도 같이 업데이트
   const ta=document.getElementById("summaryTable");
   const brandOrder=[
     {name:"레터스 전체",cat:null,isTotal:true},
