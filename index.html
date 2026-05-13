@@ -80,7 +80,7 @@ tbody tr.latest{background:#fffbeb}
     <div><h1>브랜드 청구 추이표</h1><p class="sub">라스트마일사업팀 · 시공비 청구 및 공헌이익</p></div>
     <div style="display:flex;align-items:center;gap:6px">
       <div id="statusBadge" class="status loading"><div class="dot"></div><span id="statusText">연결 중</span></div>
-      <button class="refresh-btn" id="refreshBtn" onclick="fetchSheet()" style="display:none">↻</button>
+      <button class="refresh-btn" id="refreshBtn" onclick="fetchSheet()" style="display:none">↻ 새로고침</button>
     </div>
   </div>
   <div class="tabs" id="brandTabs"></div>
@@ -90,8 +90,6 @@ tbody tr.latest{background:#fffbeb}
     <button class="view-btn" data-v="rate" onclick="setView('rate',this)">비율</button>
   </div>
   <div class="kpis" id="kpiArea"></div>
-
-  <!-- 브랜드추이표 -->
   <div class="card" id="summaryCard">
     <div class="card-head">
       <h3>브랜드추이표</h3>
@@ -104,8 +102,6 @@ tbody tr.latest{background:#fffbeb}
     </div>
     <div class="tbl-wrap" id="summaryTable"></div>
   </div>
-
-  <!-- 차트1: 금액 추이 -->
   <div class="card" id="chart1Card">
     <div class="card-head">
       <h3>시공결과 · 청구 · 지급 · 공헌이익 추이</h3>
@@ -113,8 +109,6 @@ tbody tr.latest{background:#fffbeb}
     </div>
     <div class="chart-box"><canvas id="chart1"></canvas></div>
   </div>
-
-  <!-- 차트2: 비율 추이 -->
   <div class="card" id="chart2Card">
     <div class="card-head">
       <h3>청구율 · 지급율 · 공헌이익률 추이 (%)</h3>
@@ -122,7 +116,6 @@ tbody tr.latest{background:#fffbeb}
     </div>
     <div class="chart-box small"><canvas id="chart2"></canvas></div>
   </div>
-
   <div class="card" id="chart3Card" style="display:none"><h3>지급 · 공제 · 최종지급 상세</h3><div class="chart-box small"><canvas id="chart3"></canvas></div></div>
   <div class="card" id="yoyCard"><h3 id="yoyTitle"></h3><div class="yoy" id="yoyArea"></div></div>
   <div class="card"><h3>상세 데이터 (백만원)</h3><div class="tbl-wrap" id="tableArea"></div></div>
@@ -130,16 +123,110 @@ tbody tr.latest{background:#fffbeb}
 </div>
 
 <script>
-// Register datalabels plugin
 Chart.register(ChartDataLabels);
-// But default to OFF globally
 Chart.defaults.plugins.datalabels.display = false;
 
-const SHEET_ID="1CyNfgNC6j5tfu5FvQmwpu1_GODxpQmeP-Y2Qxcd1JhA";
-const BC={"레터스 전체":"#6366f1","퍼시스":"#3b82f6","시디즈·알로소":"#8b5cf6","일룸·데스커·슬로우베드":"#f59e0b","AS":"#64748b","외부화주사":"#ec4899"};
+const SHEET_ID = "1CyNfgNC6j5tfu5FvQmwpu1_GODxpQmeP-Y2Qxcd1JhA";
+const BC = {"레터스 전체":"#6366f1","퍼시스":"#3b82f6","시디즈·알로소":"#8b5cf6","일룸·데스커·슬로우베드":"#f59e0b","AS":"#64748b","외부화주사":"#ec4899"};
+
 function RR(m,a,b,c,d,e,f,g,h,i){return{m,시공결과:a,청구:b,청구율:c,지급:d,공제:e,최종지급:f,지급율:g,공헌이익:h,공헌율:i}}
 
-const FALLBACK={
+// ===== parseCSV: 실제 구글시트 CSV 구조에 맞게 작성 =====
+function parseCSV(text) {
+  // 큰따옴표 안의 콤마 올바르게 처리
+  function parseLine(line) {
+    const result = []; let cur = "", inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { inQ = !inQ; }
+      else if (c === ',' && !inQ) { result.push(cur.trim()); cur = ""; }
+      else { cur += c; }
+    }
+    result.push(cur.trim());
+    return result;
+  }
+  // 숫자 변환: "-" → 0, "(29)" → -29
+  function toNum(s) {
+    if (!s || s === "-" || s === "" || s === "(-)") return 0;
+    const neg = s.match(/^\((\d[\d.,]*)\)$/);
+    if (neg) return -parseFloat(neg[1].replace(/,/g,""));
+    const v = parseFloat(s.replace(/,/g,"").replace(/%/g,""));
+    return isNaN(v) ? 0 : v;
+  }
+  // % 변환: 0.077 → 7.70, 7.70% → 7.70, (20.28) → -20.28
+  function pct(s) {
+    if (!s || s === "-" || s === "" || s === "(-)") return 0;
+    s = s.trim();
+    // (숫자) 형식 → 음수
+    const neg = s.match(/^\(([\d.,]+)\)$/);
+    if (neg) {
+      const v = parseFloat(neg[1].replace(/,/g,""));
+      return isNaN(v) ? 0 : parseFloat((-v).toFixed(2));
+    }
+    // % 기호 있으면 그대로
+    if (s.includes("%")) {
+      const v = parseFloat(s.replace(/%/g,"").replace(/,/g,""));
+      return isNaN(v) ? 0 : parseFloat(v.toFixed(2));
+    }
+    const v = parseFloat(s.replace(/,/g,""));
+    if (isNaN(v)) return 0;
+    // 소수(0.xxx)면 ×100
+    if (Math.abs(v) < 1) return parseFloat((v * 100).toFixed(2));
+    // 이미 % 값이면 그대로
+    return parseFloat(v.toFixed(2));
+  }
+
+  const lines = text.split("\n");
+  const result = {};
+  let cur = null, hdr = false;
+
+  // 브랜드 매핑 (실제 CSV 헤더 형식 기준)
+  const brandMap = [
+    { re:/라스트마일.*마감/, name:"레터스 전체" },
+    { re:/^\[퍼시스\]$/, name:"퍼시스" },
+    { re:/^\[시디즈\]/, name:"시디즈·알로소" },
+    { re:/^\[일룸\]/, name:"일룸·데스커·슬로우베드" },
+    { re:/^\[AS\]$/, name:"AS" },
+    { re:/^\[외부화주사\]$/, name:"외부화주사" },
+  ];
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const row = parseLine(line);
+    const first = row[0].trim();
+    const joined = row.join("").trim();
+
+    // 브랜드 섹션 감지
+    let matched = false;
+    for (const {re, name} of brandMap) {
+      if (re.test(first) || re.test(joined)) {
+        cur = name; result[cur] = []; hdr = false; matched = true; break;
+      }
+    }
+    if (matched) continue;
+
+    // 헤더 행 ("구분" 포함된 행)
+    if (first === "구분" || (first === "" && row.some(c=>c.trim()==="구분"))) { hdr = true; continue; }
+    if (!cur || !hdr) continue;
+
+    // 날짜: "24-1월", "24-12월", "25-01월" 모두 처리
+    const mc = first.match(/^(\d{2})-0?(\d{1,2})월?$/);
+    if (!mc) continue;
+    const m = `${mc[1]}-${mc[2].padStart(2,"0")}`;
+
+    const 시공결과=toNum(row[1]), 청구=toNum(row[2]), 청구율=pct(row[3]);
+    const 지급=toNum(row[4]),     공제=toNum(row[5]), 최종지급=toNum(row[6]);
+    const 지급율=pct(row[7]),     공헌이익=toNum(row[8]), 공헌율=pct(row[9]);
+
+    if (청구 === 0 && 시공결과 === 0) continue; // 빈 행 스킵
+
+    result[cur].push(RR(m, 시공결과, 청구, 청구율, 지급, 공제, 최종지급, 지급율, 공헌이익, 공헌율));
+  }
+  return result;
+}
+
+// ===== FALLBACK 데이터 =====
+const FALLBACK = {
 "레터스 전체":[
 RR("24-01",57664,4413,7.7,4163,29,4134,7.2,279,6.3),RR("24-02",55169,4325,7.8,4125,45,4080,7.4,246,5.7),
 RR("24-03",61855,5100,8.2,4563,44,4519,7.3,581,11.4),RR("24-04",48878,3930,8.0,3639,28,3611,7.4,319,8.1),
@@ -208,10 +295,28 @@ RR("26-03",3778,140,3.7,131,0,131,3.46,9,6.3),RR("26-04",4035,127,3.15,121,0.4,1
 };
 
 let DATA=FALLBACK, curBrand="레터스 전체", curView="overview";
-let c1,c2,c3;
-let showLabels1=false, showLabels2=false;
+let c1,c2,c3, showLabels1=false, showLabels2=false;
 
-function fmt(v){if(!v)return"-";if(Math.abs(v)>=10000)return(v/10000).toFixed(1)+"억";if(Math.abs(v)>=1000)return(v/1000).toFixed(1)+"천";return v.toLocaleString()}
+function fmt(v){
+  if(v===null||v===undefined) return "-";
+  const r=Math.round(v);
+  if(Math.abs(r)>=10000) return(r/10000).toFixed(1)+"억";
+  if(Math.abs(r)>=1000)  return(r/1000).toFixed(1)+"천";
+  return r.toLocaleString();
+}
+function fmtAmt(v){
+  if(v===null||v===undefined) return "-";
+  return Math.round(v).toLocaleString();
+}
+function fmtPct(v){
+  if(v===null||v===undefined) return "-";
+  return parseFloat(v).toFixed(2)+"%";
+}
+function fmtTrend(t){
+  if(t===undefined||t===null) return "";
+  const n=t<0;
+  return`<div class="kpi-trend ${n?"down":"up"}">${n?"▼":"▲"} ${Math.abs(t).toFixed(2)}%p</div>`;
+}
 
 function setStatus(s){
   const b=document.getElementById("statusBadge"),t=document.getElementById("statusText"),r=document.getElementById("refreshBtn");
@@ -223,24 +328,30 @@ function setStatus(s){
 async function fetchSheet(){
   setStatus("loading");
   try{
-    const res=await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=0`);
-    if(!res.ok)throw 0;
-    const txt=await res.text(),p=parseCSV(txt);
-    if(p&&Object.keys(p).length>0){DATA=p;setStatus("live")}else setStatus("fallback");
-  }catch{setStatus("fallback")}
-  buildTabs();buildMonthSelect();render();renderSummary();
+    const APPS_SCRIPT_URL="https://script.google.com/macros/s/AKfycbwzy4-nQWhHWYClfR0X-ney5AR8S8FbC-4hbiyo4w13373RsXUGCiIr1it2sjA3QOcl/exec";
+    const res=await fetch(APPS_SCRIPT_URL);
+    if(!res.ok) throw new Error("fetch failed");
+    const txt=await res.text();
+    const parsed=parseCSV(txt);
+    if(parsed&&Object.keys(parsed).length>0){DATA=parsed;setStatus("live");}
+    else setStatus("fallback");
+  }catch(e){
+    console.warn("시트 연동 실패, fallback 사용:", e);
+    setStatus("fallback");
+  }
+  buildTabs(); buildMonthSelect(); render(); renderSummary();
 }
 
 function buildTabs(){
-  const el=document.getElementById("brandTabs");el.innerHTML="";
+  const el=document.getElementById("brandTabs"); el.innerHTML="";
   Object.keys(DATA).forEach(b=>{
     const btn=document.createElement("button");
     btn.className="tab"+(b===curBrand?" active":"");
     btn.textContent=b;
     btn.style.background=b===curBrand?(BC[b]||"#6366f1"):"white";
     btn.style.color=b===curBrand?"white":"#64748b";
-    if(b===curBrand)btn.style.boxShadow=`0 2px 8px ${(BC[b]||"#6366f1")}44`;
-    btn.onclick=()=>{curBrand=b;buildTabs();render()};
+    if(b===curBrand) btn.style.boxShadow=`0 2px 8px ${(BC[b]||"#6366f1")}44`;
+    btn.onclick=()=>{curBrand=b;buildTabs();render();};
     el.appendChild(btn);
   });
 }
@@ -248,116 +359,74 @@ function buildTabs(){
 function setView(v,btn){
   curView=v;
   document.querySelectorAll(".view-btn").forEach(b=>b.classList.remove("active"));
-  btn.classList.add("active");
-  render();
+  btn.classList.add("active"); render();
 }
 
-// Toggle data labels
-function toggleLabels(chartNum){
-  if(chartNum===1){
-    showLabels1=!showLabels1;
-    document.getElementById("toggle1").classList.toggle("on",showLabels1);
-  }else{
-    showLabels2=!showLabels2;
-    document.getElementById("toggle2").classList.toggle("on",showLabels2);
-  }
+function toggleLabels(n){
+  if(n===1){showLabels1=!showLabels1;document.getElementById("toggle1").classList.toggle("on",showLabels1);}
+  else{showLabels2=!showLabels2;document.getElementById("toggle2").classList.toggle("on",showLabels2);}
   render();
 }
 
 function render(){
-  const all=DATA[curBrand]||[],filled=all.filter(d=>d.청구>0);
-  if(!filled.length)return;
-  const last=filled[filled.length-1],prev=filled.length>1?filled[filled.length-2]:null;
+  const all=DATA[curBrand]||[], filled=all.filter(d=>d.청구>0);
+  if(!filled.length) return;
+  const last=filled[filled.length-1], prev=filled.length>1?filled[filled.length-2]:null;
   const bc=BC[curBrand]||"#6366f1";
   const labels=filled.map(d=>d.m.replace(/^(\d{2})-0?(\d+)/,"'$1.$2월"));
-  const intv=Math.max(0,Math.floor(filled.length/10));
+  const dlOff={display:false};
 
   // KPI
-  const k=document.getElementById("kpiArea");
-  const th=(t)=>{if(t===undefined||t===null)return"";const n=t<0;return`<div class="kpi-trend ${n?"down":"up"}">${n?"▼":"▲"} ${Math.abs(t).toFixed(1)}%p</div>`};
-  k.innerHTML=`
-    <div class="kpi"><div class="kpi-label">시공결과금액</div><div class="kpi-val">${last.시공결과>0?last.시공결과.toLocaleString():"-"}<span class="kpi-unit">백만원</span></div><div class="kpi-sub">${last.m}</div></div>
-    <div class="kpi"><div class="kpi-label">시공비청구</div><div class="kpi-val" style="color:#f59e0b">${last.청구.toLocaleString()}<span class="kpi-unit">백만원</span></div><div class="kpi-sub">청구율 ${last.청구율}%</div>${th(prev?last.청구율-prev.청구율:null)}</div>
-    <div class="kpi"><div class="kpi-label">시공비지급액</div><div class="kpi-val" style="color:#3b82f6">${last.지급.toLocaleString()}<span class="kpi-unit">백만원</span></div><div class="kpi-sub">지급율 ${last.지급율}%</div>${th(prev?last.지급율-prev.지급율:null)}</div>
-    <div class="kpi"><div class="kpi-label">공헌이익</div><div class="kpi-val" style="color:${last.공헌이익>=0?"#10b981":"#ef4444"}">${last.공헌이익.toLocaleString()}<span class="kpi-unit">백만원</span></div><div class="kpi-sub">공헌이익률 ${last.공헌율}%</div>${th(prev?last.공헌율-prev.공헌율:null)}</div>
-    <div class="kpi"><div class="kpi-label">공제액</div><div class="kpi-val">${last.공제.toLocaleString()}<span class="kpi-unit">백만원</span></div><div class="kpi-sub">최종지급률 ${last.지급율}%</div></div>`;
+  document.getElementById("kpiArea").innerHTML=`
+    <div class="kpi"><div class="kpi-label">시공결과금액</div><div class="kpi-val">${last.시공결과>0?fmtAmt(last.시공결과):"-"}<span class="kpi-unit">백만원</span></div><div class="kpi-sub">${last.m}</div></div>
+    <div class="kpi"><div class="kpi-label">시공비청구</div><div class="kpi-val" style="color:#f59e0b">${fmtAmt(last.청구)}<span class="kpi-unit">백만원</span></div><div class="kpi-sub">청구율 ${fmtPct(last.청구율)}</div>${fmtTrend(prev?last.청구율-prev.청구율:null)}</div>
+    <div class="kpi"><div class="kpi-label">시공비지급액</div><div class="kpi-val" style="color:#3b82f6">${fmtAmt(last.지급)}<span class="kpi-unit">백만원</span></div><div class="kpi-sub">지급율 ${fmtPct(last.지급율)}</div>${fmtTrend(prev?last.지급율-prev.지급율:null)}</div>
+    <div class="kpi"><div class="kpi-label">공헌이익</div><div class="kpi-val" style="color:${last.공헌이익>=0?"#10b981":"#ef4444"}">${fmtAmt(last.공헌이익)}<span class="kpi-unit">백만원</span></div><div class="kpi-sub">공헌이익률 ${fmtPct(last.공헌율)}</div>${fmtTrend(prev?last.공헌율-prev.공헌율:null)}</div>
+    <div class="kpi"><div class="kpi-label">공제액</div><div class="kpi-val">${fmtAmt(last.공제)}<span class="kpi-unit">백만원</span></div><div class="kpi-sub">최종지급률 ${fmtPct(last.지급율)}</div></div>`;
 
-  // Visibility
   const c1c=document.getElementById("chart1Card"),c2c=document.getElementById("chart2Card"),c3c=document.getElementById("chart3Card");
   c1c.style.display=(curView==="overview"||curView==="amount")?"block":"none";
   c2c.style.display=(curView==="overview"||curView==="rate")?"block":"none";
   c3c.style.display=curView==="amount"?"block":"none";
+  if(c1)c1.destroy(); if(c2)c2.destroy(); if(c3)c3.destroy();
 
-  if(c1)c1.destroy();if(c2)c2.destroy();if(c3)c3.destroy();
-
-  // Datalabel config builders
-  const dlOff = { display: false };
-  const dlAmt = showLabels1 ? {
-    display: function(ctx){ return ctx.datasetIndex > 0; }, // line datasets only
-    align: 'top', anchor: 'end', offset: 4,
-    font: { size: 9, weight: 600 },
-    color: function(ctx){ return ctx.dataset.borderColor; },
-    formatter: function(v){ return v.toLocaleString(); },
-    padding: 2
-  } : dlOff;
-
-  const dlRate = showLabels2 ? {
-    display: true, align: 'top', anchor: 'end', offset: 4,
-    font: { size: 9, weight: 600 },
-    color: function(ctx){ return ctx.dataset.borderColor; },
-    formatter: function(v){ return v.toFixed(1) + '%'; },
-    padding: 2
-  } : dlOff;
-
-  // Chart 1: Amount
+  // Chart 1
   if(curView==="overview"||curView==="amount"){
-    c1=new Chart(document.getElementById("chart1"),{
-      type:"bar",
-      data:{labels,datasets:[
-        {label:"시공결과금액",data:filled.map(d=>d.시공결과),backgroundColor:bc+"22",borderColor:bc+"66",borderWidth:1,borderRadius:3,order:10,yAxisID:"y",datalabels:dlOff},
-        {label:"청구금액",data:filled.map(d=>d.청구),type:"line",borderColor:"#f59e0b",borderWidth:2.5,pointRadius:showLabels1?2:0,tension:.3,order:1,yAxisID:"y1",datalabels:showLabels1?{display:true,align:"top",anchor:"end",offset:4,font:{size:9,weight:600},color:"#f59e0b",formatter:v=>v.toLocaleString(),padding:2}:dlOff},
-        {label:"시공비지급액",data:filled.map(d=>d.지급),type:"line",borderColor:"#3b82f6",borderWidth:2,pointRadius:showLabels1?2:0,tension:.3,order:1,yAxisID:"y1",borderDash:[5,3],datalabels:showLabels1?{display:true,align:"bottom",anchor:"start",offset:4,font:{size:9,weight:600},color:"#3b82f6",formatter:v=>v.toLocaleString(),padding:2}:dlOff},
-        {label:"공헌이익",data:filled.map(d=>d.공헌이익),type:"line",borderColor:"#10b981",borderWidth:2.5,pointRadius:showLabels1?2:0,tension:.3,order:1,yAxisID:"y1",datalabels:showLabels1?{display:true,align:"bottom",anchor:"start",offset:4,font:{size:9,weight:600},color:"#10b981",formatter:v=>v.toLocaleString(),padding:2}:dlOff}
-      ]},
-      options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},
-        plugins:{legend:{labels:{font:{size:11},usePointStyle:true,pointStyle:"circle"}},datalabels:dlOff},
-        scales:{x:{ticks:{font:{size:10},color:"#94a3b8",maxRotation:45}},y:{position:"left",ticks:{font:{size:10},color:"#94a3b8",callback:v=>fmt(v)},grid:{color:"#f1f5f9"}},y1:{position:"right",ticks:{font:{size:10},color:"#94a3b8",callback:v=>fmt(v)},grid:{display:false}}}}
-    });
+    c1=new Chart(document.getElementById("chart1"),{type:"bar",data:{labels,datasets:[
+      {label:"시공결과금액",data:filled.map(d=>d.시공결과),backgroundColor:bc+"22",borderColor:bc+"66",borderWidth:1,borderRadius:3,order:10,yAxisID:"y",datalabels:dlOff},
+      {label:"청구금액",data:filled.map(d=>d.청구),type:"line",borderColor:"#f59e0b",borderWidth:2.5,pointRadius:showLabels1?2:0,tension:.3,order:1,yAxisID:"y1",datalabels:showLabels1?{display:true,align:"top",anchor:"end",offset:4,font:{size:9,weight:600},color:"#f59e0b",formatter:v=>v.toLocaleString(),padding:2}:dlOff},
+      {label:"시공비지급액",data:filled.map(d=>d.지급),type:"line",borderColor:"#3b82f6",borderWidth:2,pointRadius:showLabels1?2:0,tension:.3,order:1,yAxisID:"y1",borderDash:[5,3],datalabels:showLabels1?{display:true,align:"bottom",anchor:"start",offset:4,font:{size:9,weight:600},color:"#3b82f6",formatter:v=>v.toLocaleString(),padding:2}:dlOff},
+      {label:"공헌이익",data:filled.map(d=>d.공헌이익),type:"line",borderColor:"#10b981",borderWidth:2.5,pointRadius:showLabels1?2:0,tension:.3,order:1,yAxisID:"y1",datalabels:showLabels1?{display:true,align:"bottom",anchor:"start",offset:4,font:{size:9,weight:600},color:"#10b981",formatter:v=>v.toLocaleString(),padding:2}:dlOff}
+    ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},
+      plugins:{legend:{labels:{font:{size:11},usePointStyle:true,pointStyle:"circle"}},datalabels:dlOff},
+      scales:{x:{ticks:{font:{size:10},color:"#94a3b8",maxRotation:45}},y:{position:"left",ticks:{font:{size:10},color:"#94a3b8",callback:v=>fmt(v)},grid:{color:"#f1f5f9"}},y1:{position:"right",ticks:{font:{size:10},color:"#94a3b8",callback:v=>fmt(v)},grid:{display:false}}}}});
   }
 
-  // Chart 2: Rate
+  // Chart 2
   if(curView==="overview"||curView==="rate"){
-    c2=new Chart(document.getElementById("chart2"),{
-      type:"line",
-      data:{labels,datasets:[
-        {label:"청구율",data:filled.map(d=>d.청구율),borderColor:"#f59e0b",borderWidth:2.5,pointRadius:showLabels2?2:0,tension:.3,datalabels:showLabels2?{display:true,align:"top",anchor:"end",offset:4,font:{size:9,weight:600},color:"#f59e0b",formatter:v=>v.toFixed(1)+"%",padding:2}:dlOff},
-        {label:"지급율",data:filled.map(d=>d.지급율),borderColor:"#8b5cf6",borderWidth:2.5,pointRadius:showLabels2?2:0,tension:.3,datalabels:showLabels2?{display:true,align:"bottom",anchor:"start",offset:4,font:{size:9,weight:600},color:"#8b5cf6",formatter:v=>v.toFixed(1)+"%",padding:2}:dlOff},
-        {label:"공헌이익률",data:filled.map(d=>d.공헌율),borderColor:"#10b981",borderWidth:2.5,pointRadius:showLabels2?2:0,tension:.3,datalabels:showLabels2?{display:true,align:"top",anchor:"end",offset:4,font:{size:9,weight:600},color:"#10b981",formatter:v=>v.toFixed(1)+"%",padding:2}:dlOff}
-      ]},
-      options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},
-        plugins:{legend:{labels:{font:{size:11},usePointStyle:true,pointStyle:"circle"}},datalabels:dlOff},
-        scales:{x:{ticks:{font:{size:10},color:"#94a3b8",maxRotation:45}},y:{ticks:{font:{size:10},color:"#94a3b8",callback:v=>v+"%"},grid:{color:"#f1f5f9"}}}}
-    });
+    c2=new Chart(document.getElementById("chart2"),{type:"line",data:{labels,datasets:[
+      {label:"청구율",data:filled.map(d=>d.청구율),borderColor:"#f59e0b",borderWidth:2.5,pointRadius:showLabels2?2:0,tension:.3,datalabels:showLabels2?{display:true,align:"top",anchor:"end",offset:4,font:{size:9,weight:600},color:"#f59e0b",formatter:v=>v.toFixed(2)+"%",padding:2}:dlOff},
+      {label:"지급율",data:filled.map(d=>d.지급율),borderColor:"#8b5cf6",borderWidth:2.5,pointRadius:showLabels2?2:0,tension:.3,datalabels:showLabels2?{display:true,align:"bottom",anchor:"start",offset:4,font:{size:9,weight:600},color:"#8b5cf6",formatter:v=>v.toFixed(2)+"%",padding:2}:dlOff},
+      {label:"공헌이익률",data:filled.map(d=>d.공헌율),borderColor:"#10b981",borderWidth:2.5,pointRadius:showLabels2?2:0,tension:.3,datalabels:showLabels2?{display:true,align:"top",anchor:"end",offset:4,font:{size:9,weight:600},color:"#10b981",formatter:v=>v.toFixed(2)+"%",padding:2}:dlOff}
+    ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},
+      plugins:{legend:{labels:{font:{size:11},usePointStyle:true,pointStyle:"circle"}},datalabels:dlOff},
+      scales:{x:{ticks:{font:{size:10},color:"#94a3b8",maxRotation:45}},y:{ticks:{font:{size:10},color:"#94a3b8",callback:v=>v+"%"},grid:{color:"#f1f5f9"}}}}});
   }
 
-  // Chart 3: Detail
+  // Chart 3
   if(curView==="amount"){
-    c3=new Chart(document.getElementById("chart3"),{
-      type:"bar",
-      data:{labels,datasets:[
-        {label:"최종지급액",data:filled.map(d=>d.최종지급),backgroundColor:"#c4b5fd",borderRadius:3,order:10},
-        {label:"공제액",data:filled.map(d=>d.공제),backgroundColor:"#fca5a5",borderRadius:3,order:10},
-        {label:"청구금액",data:filled.map(d=>d.청구),type:"line",borderColor:"#f59e0b",borderWidth:2,pointRadius:0,tension:.3,order:1}
-      ]},
-      options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},
-        plugins:{legend:{labels:{font:{size:11},usePointStyle:true,pointStyle:"circle"}},datalabels:{display:false}},
-        scales:{x:{ticks:{font:{size:10},color:"#94a3b8",maxRotation:45}},y:{ticks:{font:{size:10},color:"#94a3b8",callback:v=>fmt(v)},grid:{color:"#f1f5f9"}}}}
-    });
+    c3=new Chart(document.getElementById("chart3"),{type:"bar",data:{labels,datasets:[
+      {label:"최종지급액",data:filled.map(d=>d.최종지급),backgroundColor:"#c4b5fd",borderRadius:3,order:10},
+      {label:"공제액",data:filled.map(d=>d.공제),backgroundColor:"#fca5a5",borderRadius:3,order:10},
+      {label:"청구금액",data:filled.map(d=>d.청구),type:"line",borderColor:"#f59e0b",borderWidth:2,pointRadius:0,tension:.3,order:1}
+    ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},
+      plugins:{legend:{labels:{font:{size:11},usePointStyle:true,pointStyle:"circle"}},datalabels:{display:false}},
+      scales:{x:{ticks:{font:{size:10},color:"#94a3b8",maxRotation:45}},y:{ticks:{font:{size:10},color:"#94a3b8",callback:v=>fmt(v)},grid:{color:"#f1f5f9"}}}}});
   }
 
   // YoY
   const yc=document.getElementById("yoyCard"),ya=document.getElementById("yoyArea"),yt=document.getElementById("yoyTitle");
-  const lm=last.m.split("-")[1],yoy=filled.filter(d=>d.m.endsWith("-"+lm));
+  const lm=last.m.split("-")[1], yoy=filled.filter(d=>d.m.endsWith("-"+lm));
   if(curView==="overview"&&yoy.length>1){
     yc.style.display="block";
     yt.textContent=`동월 전년비교 (${parseInt(lm)}월)`;
@@ -366,23 +435,23 @@ function render(){
       return`<div class="yoy-item" style="background:${isLast?bc+"0d":"#f8fafc"};border:1px solid ${isLast?bc+"33":"#f1f5f9"}">
         <div class="yoy-year" style="color:${isLast?bc:"#64748b"}">20${yr}년</div>
         <div class="yoy-label">시공결과</div><div class="yoy-val">${d.시공결과>0?d.시공결과.toLocaleString():"-"}</div>
-        <div class="yoy-label">청구 / 청구율</div><div class="yoy-val sm">${d.청구.toLocaleString()} / ${d.청구율>0?d.청구율+"%":"-"}</div>
-        <div class="yoy-label">공헌이익 / 공헌율</div><div class="yoy-val sm" style="color:${d.공헌이익>=0?"#10b981":"#ef4444"};margin-bottom:0">${d.공헌이익.toLocaleString()} / ${d.공헌율}%</div>
-      </div>`}).join("");
-  }else yc.style.display="none";
+        <div class="yoy-label">청구 / 청구율</div><div class="yoy-val sm">${fmtAmt(d.청구)} / ${d.청구율>0?fmtPct(d.청구율):"-"}</div>
+        <div class="yoy-label">공헌이익 / 공헌율</div><div class="yoy-val sm" style="color:${d.공헌이익>=0?"#10b981":"#ef4444"};margin-bottom:0">${fmtAmt(d.공헌이익)} / ${fmtPct(d.공헌율)}</div>
+      </div>`;
+    }).join("");
+  } else yc.style.display="none";
 
-  // Table
-  const ta=document.getElementById("tableArea");
+  // 상세 테이블
   let html=`<table><thead><tr><th style="text-align:left">구분</th><th>시공결과</th><th>청구</th><th>청구율</th><th>지급</th><th>공제</th><th>최종지급</th><th>지급율</th><th>공헌이익</th><th>공헌율</th></tr></thead><tbody>`;
   filled.forEach((d,i)=>{
     const cls=i===filled.length-1?' class="latest"':"";
-    html+=`<tr${cls}><td>${d.m}</td><td>${d.시공결과>0?d.시공결과.toLocaleString():"-"}</td><td>${d.청구.toLocaleString()}</td><td class="amber">${d.청구율>0?d.청구율+"%":"-"}</td><td>${d.지급.toLocaleString()}</td><td>${d.공제||"-"}</td><td>${d.최종지급.toLocaleString()}</td><td class="purple">${d.지급율>0?d.지급율+"%":"-"}</td><td class="${d.공헌이익>=0?"pos":"neg"}" style="font-weight:600">${d.공헌이익.toLocaleString()}</td><td class="${d.공헌율>=0?"pos":"neg"}" style="font-weight:600">${d.공헌율}%</td></tr>`;
+    html+=`<tr${cls}><td>${d.m}</td><td>${d.시공결과>0?fmtAmt(d.시공결과):"-"}</td><td>${fmtAmt(d.청구)}</td><td class="amber">${d.청구율>0?fmtPct(d.청구율):"-"}</td><td>${fmtAmt(d.지급)}</td><td>${d.공제?fmtAmt(d.공제):"-"}</td><td>${fmtAmt(d.최종지급)}</td><td class="purple">${d.지급율>0?fmtPct(d.지급율):"-"}</td><td class="${d.공헌이익>=0?"pos":"neg"}" style="font-weight:600">${fmtAmt(d.공헌이익)}</td><td class="${d.공헌율>=0?"pos":"neg"}" style="font-weight:600">${fmtPct(d.공헌율)}</td></tr>`;
   });
   html+="</tbody></table>";
-  ta.innerHTML=html;
+  document.getElementById("tableArea").innerHTML=html;
 }
 
-// ===== Summary (브랜드추이표) =====
+// ===== 브랜드추이표 =====
 let curSummaryMonth=null;
 
 function getAllMonths(){
@@ -392,15 +461,15 @@ function getAllMonths(){
 }
 
 function buildMonthSelect(){
-  const sel=document.getElementById("monthSelect"),months=getAllMonths();
-  if(!months.length)return;
-  if(!curSummaryMonth||!months.includes(curSummaryMonth))curSummaryMonth=months[months.length-1];
-  sel.innerHTML=months.map(m=>{const[y,mo]=m.split("-");return`<option value="${m}" ${m===curSummaryMonth?"selected":""}>${"20"+y}년 ${parseInt(mo)}월</option>`}).join("");
+  const sel=document.getElementById("monthSelect"), months=getAllMonths();
+  if(!months.length) return;
+  if(!curSummaryMonth||!months.includes(curSummaryMonth)) curSummaryMonth=months[months.length-1];
+  sel.innerHTML=months.map(m=>{const[y,mo]=m.split("-");return`<option value="${m}" ${m===curSummaryMonth?"selected":""}>${"20"+y}년 ${parseInt(mo)}월</option>`;}).join("");
 }
 
 function changeMonth(dir){
-  const months=getAllMonths(),idx=months.indexOf(curSummaryMonth),next=idx+dir;
-  if(next>=0&&next<months.length){curSummaryMonth=months[next];document.getElementById("monthSelect").value=curSummaryMonth;renderSummary()}
+  const months=getAllMonths(), idx=months.indexOf(curSummaryMonth), next=idx+dir;
+  if(next>=0&&next<months.length){curSummaryMonth=months[next];document.getElementById("monthSelect").value=curSummaryMonth;renderSummary();}
 }
 
 function renderSummary(){
@@ -408,11 +477,12 @@ function renderSummary(){
   const ta=document.getElementById("summaryTable");
   const brandOrder=[
     {name:"레터스 전체",cat:null,isTotal:true},
-    {name:"퍼시스",cat:"내부"},{name:"시디즈·알로소",cat:"내부"},{name:"일룸·데스커·슬로우베드",cat:"내부"},{name:"AS",cat:"내부"},
+    {name:"퍼시스",cat:"내부"},{name:"시디즈·알로소",cat:"내부"},
+    {name:"일룸·데스커·슬로우베드",cat:"내부"},{name:"AS",cat:"내부"},
     {name:"외부화주사",cat:"외부"}];
   const rows=[];
-  brandOrder.forEach(b=>{const arr=DATA[b.name];if(!arr)return;const d=arr.find(r=>r.m===curSummaryMonth);if(d&&d.청구>0)rows.push({...b,d})});
-  if(!rows.length){ta.innerHTML='<p style="color:#94a3b8;font-size:12px;padding:10px">해당 월 데이터 없음</p>';return}
+  brandOrder.forEach(b=>{const arr=DATA[b.name];if(!arr)return;const d=arr.find(r=>r.m===curSummaryMonth);if(d&&d.청구>0)rows.push({...b,d});});
+  if(!rows.length){ta.innerHTML='<p style="color:#94a3b8;font-size:12px;padding:10px">해당 월 데이터 없음</p>';return;}
   const pc=v=>v>=0?"#10b981":"#ef4444";
   let html=`<table><thead><tr style="border-bottom:2px solid #e2e8f0">
     <th style="text-align:left;padding:8px 6px;min-width:45px">구분</th><th style="text-align:left;padding:8px 6px;min-width:70px">브랜드</th>
@@ -421,46 +491,28 @@ function renderSummary(){
     <th style="padding:8px 6px">공헌이익</th><th style="padding:8px 6px">공헌율</th></tr></thead><tbody>`;
   let lastCat=null;
   rows.forEach(r=>{
-    const d=r.d,showCat=r.isTotal||r.cat!==lastCat;lastCat=r.cat;
+    const d=r.d, showCat=r.isTotal||r.cat!==lastCat; lastCat=r.cat;
     const dn=r.name==="레터스 전체"?"전체":r.name==="시디즈·알로소"?"시디즈":r.name==="일룸·데스커·슬로우베드"?"일룸":r.name;
     html+=`<tr class="summary-row${r.isTotal?" summary-total":""}" style="border-bottom:1px solid #f1f5f9;${r.isTotal?"background:#eef2ff":""}">
       <td style="padding:7px 6px;font-weight:600;color:#64748b;font-size:11px">${showCat?(r.isTotal?"전체":r.cat):""}</td>
       <td style="padding:7px 6px;font-weight:${r.isTotal?700:600}">${dn}</td>
-      <td style="padding:7px 6px;text-align:right">${d.시공결과>0?d.시공결과.toLocaleString():"-"}</td>
-      <td style="padding:7px 6px;text-align:right;font-weight:600">${d.청구.toLocaleString()}</td>
-      <td style="padding:7px 6px;text-align:right;color:#f59e0b">${d.청구율>0?d.청구율+"%":"-"}</td>
-      <td style="padding:7px 6px;text-align:right">${d.지급.toLocaleString()}</td>
-      <td style="padding:7px 6px;text-align:right">${d.공제||"-"}</td>
-      <td style="padding:7px 6px;text-align:right">${d.최종지급.toLocaleString()}</td>
-      <td style="padding:7px 6px;text-align:right;color:#8b5cf6">${d.지급율>0?d.지급율+"%":"-"}</td>
-      <td style="padding:7px 6px;text-align:right;font-weight:700;color:${pc(d.공헌이익)}">${d.공헌이익>=0?d.공헌이익.toLocaleString():"("+Math.abs(d.공헌이익).toLocaleString()+")"}</td>
-      <td style="padding:7px 6px;text-align:right;font-weight:700;color:${pc(d.공헌율)}">${d.공헌율}%</td></tr>`;
+      <td style="padding:7px 6px;text-align:right">${d.시공결과>0?fmtAmt(d.시공결과):"-"}</td>
+      <td style="padding:7px 6px;text-align:right;font-weight:600">${fmtAmt(d.청구)}</td>
+      <td style="padding:7px 6px;text-align:right;color:#f59e0b">${d.청구율>0?fmtPct(d.청구율):"-"}</td>
+      <td style="padding:7px 6px;text-align:right">${fmtAmt(d.지급)}</td>
+      <td style="padding:7px 6px;text-align:right">${d.공제?fmtAmt(d.공제):"-"}</td>
+      <td style="padding:7px 6px;text-align:right">${fmtAmt(d.최종지급)}</td>
+      <td style="padding:7px 6px;text-align:right;color:#8b5cf6">${d.지급율>0?fmtPct(d.지급율):"-"}</td>
+      <td style="padding:7px 6px;text-align:right;font-weight:700;color:${pc(d.공헌이익)}">${d.공헌이익>=0?fmtAmt(d.공헌이익):"("+fmtAmt(Math.abs(d.공헌이익))+")"}</td>
+      <td style="padding:7px 6px;text-align:right;font-weight:700;color:${pc(d.공헌율)}">${fmtPct(d.공헌율)}</td></tr>`;
   });
-  html+="</tbody></table>";ta.innerHTML=html;
+  html+="</tbody></table>"; ta.innerHTML=html;
 }
 
-function parseCSV(text){
-  const lines=text.split("\n").map(l=>l.split(",").map(c=>c.replace(/^"|"$/g,"").trim()));
-  const result={};let cur=null,hdr=false;
-  const bm=[[/라스트마일.*마감/,"레터스 전체"],[/퍼시스/,"퍼시스"],[/시디즈/,"시디즈·알로소"],[/일룸/,"일룸·데스커·슬로우베드"],[/^AS$/,"AS"],[/외부화주사/,"외부화주사"]];
-  for(const row of lines){
-    const j=row.join("");if(!j)continue;
-    for(const[re,name]of bm){if(re.test(j)){cur=name;result[cur]=[];hdr=false;break}}
-    if(row.some(c=>c.includes("구분"))){hdr=true;continue}
-    if(!cur||!hdr)continue;
-    const mc=(row[1]||row[0]||"").match(/(\d{2})-0?(\d{1,2})/);
-    if(!mc)continue;
-    const m=`${mc[1]}-${mc[2].padStart(2,"0")}`;
-    const n=row.slice(2).map(c=>{const v=parseFloat(c.replace(/,/g,"").replace(/%/g,""));return isNaN(v)?0:v});
-    if(n[1]===0&&n[0]===0)continue;
-    result[cur].push(RR(m,n[0],n[1],n[2],n[3],n[4],n[5],n[6],n[7],n[8]));
-  }
-  return result;
-}
-
-// Init
-window.addEventListener('DOMContentLoaded',function(){
-  buildTabs();buildMonthSelect();fetchSheet();
+// 초기화
+window.addEventListener('DOMContentLoaded', function(){
+  buildTabs(); buildMonthSelect(); render(); renderSummary();
+  fetchSheet(); // 구글시트 연동 시도
 });
 </script>
 </body>
