@@ -339,7 +339,7 @@ async function fetchSheet(){
     console.warn("시트 연동 실패, fallback 사용:", e);
     setStatus("fallback");
   }
-  buildTabs(); buildMonthSelect(); render(); renderSummary();
+  buildTabs(); buildMonthSelect(); renderSummary();
 }
 
 function buildTabs(){
@@ -468,8 +468,6 @@ function buildMonthSelect(){
   if(!months.length) return;
   if(!curSummaryMonth||!months.includes(curSummaryMonth)) curSummaryMonth=months[months.length-1];
   sel.innerHTML=months.map(m=>{const[y,mo]=m.split("-");return`<option value="${m}" ${m===curSummaryMonth?"selected":""}>${"20"+y}년 ${parseInt(mo)}월</option>`;}).join("");
-  // 선택된 월로 KPI 초기화
-  render();
 }
 
 function changeMonth(dir){
@@ -517,8 +515,7 @@ function renderSummary(){
 
 // 초기화
 window.addEventListener('DOMContentLoaded', function(){
-  buildTabs(); buildMonthSelect(); render(); renderSummary();
-  fetchSheet(); // 구글시트 연동 시도
+  fetchSheet(); // 구글시트 연동 시도 (완료 후 render 포함)
 });
 </script>
 </body>
